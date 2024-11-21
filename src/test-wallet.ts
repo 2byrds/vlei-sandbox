@@ -14,9 +14,11 @@ import {
   CredentialData,
   Saider,
   State,
+  IssueCredentialArgs,
 } from "signify-ts";
 // } from "signify-ts-old"; // Use signify-ts-old if testing against KERIA 0.1.3
 import { sleep } from "./test-utils";
+import { json } from "stream/consumers";
 
 export const KERIA_HOSTNAME = process.env.KERIA_HOSTNAME ?? `localhost`;
 export const KERIA_AGENT_URL = `http://${KERIA_HOSTNAME}:3901`;
@@ -357,7 +359,7 @@ export class TestWallet {
     return op;
   }
 
-  async createCredential(groupAlias: string, args: CredentialData) {
+  async createCredential(groupAlias: string, args: IssueCredentialArgs) {
     let hab = await this.client.identifiers().get(groupAlias);
 
     const result = await this.client.credentials().issue(groupAlias, args);
@@ -407,7 +409,7 @@ export class TestWallet {
   async join(group: string, exn: any): Promise<Operation> {
     switch (exn.exn.r) {
       case "/multisig/iss":
-        return await this.createCredential(group, exn.exn.e.acdc);
+        return await this.createCredential(group, exn.exn.e);
       case "/ipex/grant":
       case "/multisig/rpy":
       case "/multisig/vcp":
@@ -416,6 +418,15 @@ export class TestWallet {
       default:
         throw new Error(`Do not know how to join ${exn.exn.r} at the moment`);
     }
+  }
+
+  async joinCredIssuance(group: string): Promise<void> {
+      await sleep(1000);
+      const note = await this.waitNotification("/multisig/iss", AbortSignal.timeout(10000));
+      const exn = await this.client.exchanges().get(note.a.d);
+      const op = await this.join(group, exn);
+    
+      await this.wait(op, { signal: AbortSignal.timeout(20000) });  
   }
 
   async waitNotification(route: string, signal: AbortSignal) {
@@ -547,6 +558,13 @@ export class TestWallet {
     return groupMembers as any;
   }
 
+  async rollback<T>(name: string, sn: number): Promise<void> {
+    const path = `/identifiers/${name}/events`;
+    const data = {'sn_rollback': sn,};
+    const method = 'POST';
+    const res = await this.client.fetch(path, method, data);    
+  }
+
   async wait<T>(
     op: Operation<T>,
     options: {
@@ -627,8 +645,8 @@ export interface LegalEntityCredentialConfig extends CredentialConfig {
 }
 
 export class vLEICredential {
-  static qvi(args: QviCredentialConfig): CredentialData {
-    return {
+  static qvi(args: QviCredentialConfig): IssueCredentialArgs {
+    return {acdc:{
       ri: args.registry,
       s: "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao",
       a: {
@@ -645,6 +663,6 @@ export class vLEICredential {
           l: "All information in a valid, unexpired, and non-revoked vLEI Credential, as defined in the associated Ecosystem Governance Framework, is accurate as of the date the validation process was complete. The vLEI Credential has been issued to the legal entity or person named in the vLEI Credential as the subject; and the qualified vLEI Issuer exercised reasonable care to perform the validation process set forth in the vLEI Ecosystem Governance Framework.",
         },
       })[1],
-    };
-  }
+    }
+  }}
 }

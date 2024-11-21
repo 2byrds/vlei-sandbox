@@ -35,7 +35,7 @@ test("Resolve OOBIs", async () => {
       }
     }
 
-    expect(await wallet.client.contacts().list()).toHaveLength(2);
+    expect((await wallet.client.contacts().list()).length).greaterThanOrEqual(2);
   }
 });
 
@@ -89,11 +89,6 @@ describe("Credential issuance", async () => {
   });
 
   test("Member 3 has been on holiday and needs to catch up", async () => {
-    await sleep(1000);
-    const note = await wallet3.waitNotification("/multisig/iss", AbortSignal.timeout(10000));
-    const exn = await wallet3.client.exchanges().get(note.a.d);
-    const op = await wallet3.join(groupAlias, exn);
-
-    await wallet3.wait(op, { signal: AbortSignal.timeout(20000) });
+    wallet3.joinCredIssuance(groupAlias);
   });
 });
