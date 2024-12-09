@@ -22,11 +22,18 @@ import { json } from "stream/consumers";
 
 export const KERIA_HOSTNAME = process.env.KERIA_HOSTNAME ?? `localhost`;
 export const KERIA_AGENT_URL = `http://${KERIA_HOSTNAME}:3901`;
+export const KERIA_PORT = 3901;
 export const KERIA_BOOT_URL = `http://${KERIA_HOSTNAME}:3903`;
+
+export const KERIA_DEBUG_HOSTNAME = process.env.KERIA_HOSTNAME ?? `localhost`;
+export const KERIA_DEBUG_AGENT_URL = `http://${KERIA_DEBUG_HOSTNAME}:4901`;
+export const KERIA_DEBUG_PORT = 4901;
+export const KERIA_DEBUG_BOOT_URL = `http://${KERIA_DEBUG_HOSTNAME}:4903`;
 
 export interface TestWalletOptions {
   alias: string;
   passcode?: string;
+  debug?: boolean;
 }
 
 function assertDefined<T>(obj: T | null): asserts obj is T {
@@ -43,7 +50,7 @@ export class TestWallet {
   private _client: SignifyClient | null = null;
   private _identifier: HabState | null = null;
 
-  constructor(private options: TestWalletOptions) {}
+  constructor(public options: TestWalletOptions) {}
 
   get identifier(): HabState {
     assertDefined(this._identifier);
@@ -65,26 +72,29 @@ export class TestWallet {
   }
 
   async init() {
-    await this.boot();
+    await this.boot(this.options.debug);
     await this.connect();
     await this.createIdentifier();
   }
 
-  async boot() {
+  async boot(debug=false) {
     await ready();
+    const kurl = debug ? KERIA_DEBUG_AGENT_URL : KERIA_AGENT_URL;
+    const kburl = debug ? KERIA_DEBUG_BOOT_URL : KERIA_BOOT_URL;
+
     if (!this.options.passcode) {
       const passcode = randomPasscode();
       const client = new SignifyClient(
-        KERIA_AGENT_URL,
+        kurl,
         passcode,
         Tier.low,
-        KERIA_BOOT_URL
+        kburl
       );
       await client.boot();
       this._client = client;
     } else {
       const client = new SignifyClient(
-        KERIA_AGENT_URL,
+        kurl,
         this.options.passcode,
         Tier.low
       );
@@ -154,7 +164,11 @@ export class TestWallet {
     return oobi;
   }
 
-  async resolveOobi(oobi: string, alias?: string) {
+  async resolveOobi(oobi: string, alias?: string, debug?: boolean) {
+    // if the client is a docker client (3901), but the oobi is a debug oobi (4902) then substitute localhost with host.docker.internal
+    if (debug && this.client.url.match(/3901/) && oobi.match(/4902/)) {
+      oobi = oobi.replace(/localhost/g, 'host.docker.internal');
+    }
     const op2 = await this.client.oobis().resolve(oobi, alias);
     await this.wait(op2);
   }
@@ -421,12 +435,12 @@ export class TestWallet {
   }
 
   async joinCredIssuance(group: string): Promise<void> {
-      await sleep(1000);
-      const note = await this.waitNotification("/multisig/iss", AbortSignal.timeout(10000));
+      const note = await this.waitNotification("/multisig/iss", AbortSignal.timeout(100000));
       const exn = await this.client.exchanges().get(note.a.d);
       const op = await this.join(group, exn);
     
-      await this.wait(op, { signal: AbortSignal.timeout(20000) });  
+      await this.wait(op, { signal: AbortSignal.timeout(200000) });
+        
   }
 
   async waitNotification(route: string, signal: AbortSignal) {
@@ -442,6 +456,19 @@ export class TestWallet {
     }
 
     signal.throwIfAborted();
+  }
+
+  /**
+   * Mark and remove notification.
+   */
+  async markAndRemoveNotification(
+    note: Notification
+  ): Promise<void> {
+    try {
+        await this.client.notifications().mark(note.i);
+    } finally {
+        await this.client.notifications().delete(note.i);
+    }
   }
 
   async queryLastKeyState(prefix: string, sn?: number): Promise<State> {
@@ -565,6 +592,12 @@ export class TestWallet {
     const res = await this.client.fetch(path, method, data);    
   }
 
+  async deleteEscrows<T>(name: string, escrow: string): Promise<void> {
+    const path = `/escrows/clear/${name}/${escrow}`;
+    const method = 'DELETE';
+    const res = await this.client.fetch(path, method, null);    
+  }
+
   async wait<T>(
     op: Operation<T>,
     options: {
@@ -665,4 +698,11 @@ export class vLEICredential {
       })[1],
     }
   }}
+}
+
+export interface Notification {
+  i: string;
+  dt: string;
+  r: boolean;
+  a: { r: string; d?: string; m?: string };
 }
